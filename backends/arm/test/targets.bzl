@@ -70,6 +70,13 @@ def define_arm_tests():
         # "misc/test_dim_order.py", (TODO - T238390249)
     ]
 
+    # Public API backward-compatibility scenarios
+    test_files += [
+        "public_api_bc/test_ethosu_flow.py",
+        "public_api_bc/test_vgf_fp_flow.py",
+        "public_api_bc/test_vgf_int_flow.py",
+    ]
+
     # Deprecation tests
     test_files += [
         "deprecation/test_arm_compile_spec_deprecation.py",
@@ -117,6 +124,7 @@ def define_arm_tests():
                 "//executorch/backends/arm:vgf",
                 "//executorch/backends/test:graph_builder",
                 "//executorch/backends/test:program_builder",
+                "//executorch/extension/export_util:export_util",
                 "//executorch/exir:lib",
                 "fbsource//third-party/pypi/pytest:pytest",
                 "fbsource//third-party/pypi/parameterized:parameterized",
