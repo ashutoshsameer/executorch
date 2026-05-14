@@ -38,6 +38,10 @@ def get_scratch_size_from_delegate(blob: bytes) -> int | None:
 
 def _extract_pte_from_bundle(pte_data: bytes) -> bytes:
     try:
+        # If no mention of BP08(specifier for bundled program), return pte
+        if len(pte_data) < 8 or pte_data[4:8] != b"BP08":
+            return pte_data
+        # bundled program
         bundled = deserialize_from_flatbuffer_to_bundled_program(pte_data)
     except Exception:
         return pte_data
@@ -62,10 +66,8 @@ def get_scratch_from_pte(pte_path: str) -> int | None:
     if not sizes:
         return None
 
-    for did, s in sizes:
-        print(f"{did}: scratch_size={s} bytes")
     max_size = max(s for _, s in sizes)
-    print(f"max_scratch_size={max_size} bytes")
+    print(f"{max_size} bytes needed for the scratch buffer")
     return max_size
 
 
