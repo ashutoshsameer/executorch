@@ -6,11 +6,11 @@
 import numpy as np
 import pytest
 import torch
-
 from executorch.backends.nxp.backend.edge_program_converter import (
     EdgeProgramToIRConverter,
     exir_ops,
 )
+from executorch.backends.nxp.tests.dataset_creator import RandomDatasetCreator
 from executorch.backends.nxp.tests.executorch_pipeline import (
     to_edge_program,
     to_quantized_edge_program,
@@ -21,7 +21,19 @@ from executorch.backends.nxp.tests.executors import (
     ToNCHWPreprocess,
     ToNHWCPreprocess,
 )
+from executorch.backends.nxp.tests.graph_verifier import DetailedGraphVerifier
 from executorch.backends.nxp.tests.models import Conv2dModule, LinearModule, ReLUModule
+from executorch.backends.nxp.tests.nsys_testing import lower_run_compare
+from executorch.backends.nxp.tests.ops_aliases import (
+    AddMm,
+    Convolution,
+    DequantizePerChannel,
+    DequantizePerTensor,
+    PermuteCopy,
+    QuantizePerTensor,
+    Relu,
+    ViewCopy,
+)
 from torch.export import ExportedProgram
 from executorch.backends.nxp.tests.use_qat import *  # noqa F403
 
@@ -37,10 +49,10 @@ ReLU = exir_ops.edge.aten.relu.default
 
 
 class ConvReLUModule(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, in_channels=4, out_channels=8):
         super().__init__()
 
-        self.conv = Conv2dModule()
+        self.conv = Conv2dModule(in_channels=in_channels, out_channels=out_channels)
         self.relu = torch.nn.ReLU()
 
     def forward(self, x):
@@ -49,10 +61,12 @@ class ConvReLUModule(torch.nn.Module):
 
 
 class LinearReLUModule(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, in_features: int = 32, out_features: int = 16):
         super().__init__()
 
-        self.linear = LinearModule(bias=True)
+        self.linear = LinearModule(
+            bias=True, in_features=in_features, out_features=out_features
+        )
         self.relu = torch.nn.ReLU()
 
     def forward(self, x):
@@ -146,3 +160,122 @@ def test_relu_conversion__unsupported(mocker, input_shape):
     # Make sure the `relu` was NOT delegated.
     assert not graph_contains_any_of_ops(delegated_ep.graph, [ExecutorchDelegateCall])
     assert graph_contains_any_of_ops(delegated_ep.graph, [ReLU])
+
+
+class TestReLUNewNeutronFlow:
+    @pytest.mark.parametrize(
+        ["model", "input_shape"],
+        [
+            pytest.param(
+                LinearReLUModule(in_features=9, out_features=17),
+                (9, 9),
+                id="Linear(1D-in): num_channels not divisible by NUM_MACS",
+            ),
+            pytest.param(
+                LinearReLUModule(in_features=9, out_features=15),
+                (1, 7, 9),
+                id="Linear(2D-in): num_channels not divisible by NUM_MACS",
+            ),
+            pytest.param(
+                LinearReLUModule(in_features=8, out_features=16),
+                (1, 8, 8),
+                id="Linear(2D-in): num_channels divisible by NUM_MACS",
+            ),
+            pytest.param(
+                LinearReLUModule(in_features=15, out_features=17),
+                (1, 1, 15, 15),
+                id="Linear(3D-in): num_channels not divisible by NUM_MACS",
+            ),
+            pytest.param(
+                ConvReLUModule(in_channels=17, out_channels=9),
+                (1, 17, 9, 9),
+                id="Conv: num_channels not divisible by NUM_MACS",
+            ),
+            pytest.param(
+                ConvReLUModule(in_channels=8, out_channels=16),
+                (1, 8, 8, 8),
+                id="Conv: num_channels divisible by NUM_MACS",
+            ),
+        ],
+    )
+    def test_relu_conversion__full_pipeline(self, mocker, model, input_shape):
+        is_conv_module = not hasattr(model, "linear")
+
+        graph_verifier = DetailedGraphVerifier(
+            mocker=mocker,
+            expected_delegated_ops=(
+                {Convolution: 1, Relu: 1} if is_conv_module else {AddMm: 1, Relu: 1}
+            ),
+            expected_non_delegated_ops={},
+            ops_to_ignore=[
+                PermuteCopy,
+                ViewCopy,
+                QuantizePerTensor,
+                DequantizePerTensor,
+                DequantizePerChannel,
+            ],
+        )
+
+        lower_run_compare(
+            model, input_shape, graph_verifier, use_new_flow_neutron_c=True
+        )
+
+    @pytest.mark.parametrize(
+        "input_shape",
+        [
+            pytest.param(
+                (3, 9, 9),
+                id="num_channels not divisible by NUM_MACS, alone in partition",
+            ),
+            pytest.param(
+                (1, 17, 17),
+                id="num_channels not divisible by NUM_MACS, alone in partition",
+            ),
+        ],
+    )
+    def test_relu_conversion__non_delegated_with_old_flow(self, mocker, input_shape):
+        verifier = DetailedGraphVerifier(
+            mocker=mocker,
+            expected_delegated_ops={Relu: 1},
+            expected_non_delegated_ops={},
+        )
+
+        lower_run_compare(
+            ReLUModule(),
+            input_shape,
+            dlg_model_verifier=verifier,
+            dataset_creator=RandomDatasetCreator(low=-1, high=1),
+            use_new_flow_neutron_c=True,
+        )
+
+    @pytest.mark.parametrize(
+        "input_shape",
+        [
+            pytest.param(
+                (3, 9, 9),
+                id="num_channels not divisible by NUM_MACS, alone in partition",
+            ),
+            pytest.param(
+                (1, 17, 17),
+                id="num_channels not divisible by NUM_MACS, alone in partition",
+            ),
+        ],
+    )
+    def test_relu_conversion__no_delegated_node_when_noop(self, input_shape):
+        def generate_calibration_data(input_spec):
+            return [
+                # Generate inputs in range <0, 1> - ReLU degrades to identity
+                tuple([torch.rand(spec.shape, dtype=spec.dtype) for spec in input_spec])
+                for _ in range(4)
+            ]
+
+        # Run conversion
+        with pytest.raises(RuntimeError) as exception:
+            to_quantized_edge_program(
+                ReLUModule(),
+                input_shape,
+                get_calibration_inputs_fn=generate_calibration_data,
+                use_new_flow_neutron_c=True,
+            )
+
+        assert "does not contain a NeutronGraph" in str(exception.value)
