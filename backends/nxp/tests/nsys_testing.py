@@ -3,19 +3,23 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import datetime
 import functools
-import inspect
 import logging
 import os.path
+import re
 import shutil
 import subprocess
 from copy import deepcopy
 from enum import Enum
+from importlib.metadata import version
 from os import environ, mkdir
 from typing import Callable, Iterable
 
 import numpy as np
 import torch
+import yaml
+from _pytest.fixtures import TopRequest
 from executorch.backends.nxp.backend.edge_helper import is_channels_last_dim_order
 from executorch.backends.nxp.backend.ir.converter.conversion import translator
 from executorch.backends.nxp.backend.ir.converter.conversion.translator import (
@@ -40,7 +44,10 @@ from executorch.backends.nxp.tests.model_output_comparator import (
     AllCloseOutputComparator,
 )
 from executorch.backends.nxp.tests.outputs_dir_importer import outputs_dir
-from executorch.backends.nxp.tests.utils import save_pte_program
+from executorch.backends.nxp.tests.utils import (
+    change_filepath_extension,
+    save_pte_program,
+)
 from executorch.devtools.visualization.visualization_utils import (
     visualize_with_clusters,
 )
@@ -126,6 +133,18 @@ def _run_delegated_executorch_program(
             operators_not_to_delegate=operators_not_to_delegate,
             remove_quant_io_ops=remove_quant_io_ops,
         )
+
+        # Copy converter Neutron model and Neutron IR model to test_dir
+        if logging.root.isEnabledFor(logging.DEBUG):
+            assert os.path.isfile(
+                "tag1_pure.et.tflite"
+            ), "Neutron IR model not found in working directory, export in NeutronBackend failed."
+            assert os.path.isfile(
+                "tag1_neutron.et.tflite"
+            ), "Converted Neutron model not found in working directory, export in NeutronBackend failed."
+            shutil.copy("tag1_pure.et.tflite", test_dir)
+            shutil.copy("tag1_neutron.et.tflite", test_dir)
+
     except RuntimeError as e:
         if "Model converted with neutron-converter has" in str(e) and hasattr(
             dlg_model_verifier, "check_num_delegated_nodes"
@@ -391,6 +410,7 @@ def lower_run_compare(
     model: torch.nn.Module,
     input_spec: Iterable[ModelInputSpec] | tuple[int, ...],
     dlg_model_verifier: GraphVerifier,
+    request: TopRequest,
     dataset_creator=None,
     output_comparator=None,
     mocker: MockerFixture = None,
@@ -408,11 +428,12 @@ def lower_run_compare(
     :param model: Executed PyTorch model.
     :param input_spec: Model input specification. Can be either tuple of ints - single float32 input model - or Iterable
         of ModelInputSpec.
+    :param dlg_model_verifier: Graph verifier instance.
+    :param request: PyTest request needed for correct test name extraction.
     :param dataset_creator: Creator that should fill provided `dataset_dir` with model input samples.
     :param output_comparator: Comparator of results produced by NPU and CPU runs of the program.
-    :param dlg_model_verifier: Graph verifier instance.
-    :param reference_model: Version of the model which will be run to obtain reference output data.
     :param mocker: Mocker instance used by visualizer.
+    :param reference_model: Version of the model which will be run to obtain reference output data.
     :param use_qat: If True, applies quantization-aware training before conversion (without the QAT training).
     :param train_fn: Train/finetune function for QAT training. Is used only when `use_qat=True`.
     :param operators_not_to_delegate: list of operators not to delegate.
@@ -430,7 +451,7 @@ def lower_run_compare(
     model_to_delegate = model
     model_to_not_delegate = deepcopy(model)
 
-    test_name = _get_caller_name()
+    test_name = get_test_name(request)
     test_dir = os.path.join(OUTPUTS_DIR, test_name)
 
     shutil.rmtree(test_dir, ignore_errors=True)
@@ -538,6 +559,12 @@ def lower_run_compare(
 
     output_tensor_spec = _get_program_output_spec(delegated_program)
 
+    if logging.root.isEnabledFor(logging.DEBUG):
+        _generate_txt_test_data(
+            calibration_dataset_dir, testing_dataset_dir, list(input_spec)
+        )
+        dump_debug_test_summary(test_name, test_dir)
+        shutil.make_archive(test_dir, "zip", test_dir)
     npu_results_dir = os.path.join(test_dir, "results_npu")
     cpu_results_dir = os.path.join(test_dir, "results_cpu")
     output_comparator.compare_results(
@@ -549,10 +576,12 @@ def lower_run_compare_ptq_qat(
     model: torch.nn.Module,
     input_spec: list[ModelInputSpec] | tuple,
     dlg_model_verifier: GraphVerifier,
+    request: TopRequest,
     train_fn: Callable[[torch.fx.GraphModule], None],
     dataset_creator=None,
     output_comparator=None,
     mocker: MockerFixture = None,
+    operators_not_to_delegate: list[str] = None,
 ):
     """
     Run provided program twice and compare it's results.
@@ -562,10 +591,12 @@ def lower_run_compare_ptq_qat(
     :param input_spec: Model input specification. Can be either tuple - single float32 input model - or list
         of ModelInputSpec.
     :param dlg_model_verifier: Graph verifier instance.
+    :param request: PyTest request needed for correct test name extraction.
     :param train_fn: Train/finetune function for QAT training.
     :param dataset_creator: Creator that should fill provided `dataset_dir` with model input samples.
     :param output_comparator: Comparator of results produced by NPU and CPU runs of the program.
     :param mocker: Mocker instance used by visualizer.
+    :param operators_not_to_delegate: list of operators not to delegate.
     """
     assert_NSYS()
 
@@ -577,7 +608,7 @@ def lower_run_compare_ptq_qat(
     model_ptq = model
     model_qat = deepcopy(model)
 
-    test_name = _get_caller_name()
+    test_name = get_test_name(request)
     test_dir = os.path.join(OUTPUTS_DIR, test_name)
 
     shutil.rmtree(test_dir, ignore_errors=True)
@@ -606,6 +637,7 @@ def lower_run_compare_ptq_qat(
         ptq_results_dir,
         mocker,
         use_qat=False,
+        operators_not_to_delegate=operators_not_to_delegate,
     )
 
     _ = _run_delegated_executorch_program(
@@ -620,10 +652,14 @@ def lower_run_compare_ptq_qat(
         mocker,
         use_qat=True,
         train_fn=train_fn,
+        operators_not_to_delegate=operators_not_to_delegate,
     )
 
     output_tensor_spec = _get_program_output_spec(delegated_program_ptq)
 
+    if logging.root.isEnabledFor(logging.DEBUG):
+        dump_debug_test_summary(test_name, test_dir)
+        shutil.make_archive(test_dir, "zip", test_dir)
     ptq_results_dir = os.path.join(test_dir, "results_ptq")
     qat_results_dir = os.path.join(test_dir, "results_qat")
     output_comparator.compare_results(
@@ -657,13 +693,12 @@ def _parse_input_quant_params(
     return q_params
 
 
-def _get_caller_name():
-    test_function_names = ["lower_run_compare", "lower_run_compare_ptq_qat"]
-    for idx, frame in enumerate(inspect.stack()):
-        if frame.function in test_function_names:
-            # Look one index above to get caller
-            return inspect.stack()[idx + 1].function
-    return None
+def get_test_name(request):
+    # PyTest request is available, extract correct name including test class and params
+    test_name = request.node.nodeid.lstrip(":")
+    test_name = re.sub(r'[<>:"/\\|?* ,()`]', "_", test_name)
+    test_name = test_name.strip(" .")
+    return test_name
 
 
 def execute_cmd(cmd, cwd="."):
@@ -725,3 +760,93 @@ def _get_program_output_spec(exported_program) -> list[torch.Tensor]:
     output_tensors_spec = list(exported_program.graph.output_node().meta["val"])
 
     return output_tensors_spec
+
+
+def get_executorch_git_info() -> dict[str, str]:
+    def get_executorch_dir() -> str:
+        cwd = os.getcwd()
+        if "executorch" in cwd:
+            et_path = cwd
+            while os.path.basename(et_path) != "executorch":
+                et_path = os.path.dirname(et_path)
+            return et_path
+        elif os.path.isdir(et_path := os.path.join(cwd, "executorch")):
+            return et_path
+        elif os.path.isdir(et_path := os.path.join(cwd, "thirdparty", "executorch")):
+            return et_path
+        else:
+            raise FileNotFoundError("Executorch directory not found.")
+
+    executorch_dir = get_executorch_dir()
+    git_branch_cmd = f"cd {executorch_dir} && git branch --show-current"
+    git_branch, _, _ = execute_cmd(git_branch_cmd)
+    git_commit_cmd = f"cd {executorch_dir} && git rev-parse --short HEAD"
+    git_commit, _, _ = execute_cmd(git_commit_cmd)
+    return {"git_branch": git_branch, "git_commit": git_commit}
+
+
+def dump_debug_test_summary(test_name: str, test_dir: str):
+    git_info = get_executorch_git_info()
+
+    summary = {
+        "test_name": test_name,
+        "date_time": datetime.datetime.now().isoformat(),
+        "git_branch": git_info["git_branch"],
+        "git_commit": git_info["git_commit"],
+        "eiq_neutron_sdk_version": version("eiq_neutron_sdk"),
+        "eiq_nsys_version": version("eiq_nsys"),
+    }
+    with open(os.path.join(test_dir, "summary.yaml"), "w") as f:
+        yaml.dump(summary, f)
+
+
+def _store_txt_input_tensor(input_tensor_path: str, dtype: torch.dtype):
+    input_tensor = np.fromfile(input_tensor_path, dtype=dtype)
+    int__max = np.iinfo(np.int32).max
+
+    with open(change_filepath_extension(input_tensor_path, "txt"), "w") as f:
+        f.write("Flattened tensor shape:" + str(input_tensor.shape))
+        f.write("\nOriginal tensor shape:" + str(list(input_tensor.shape)) + "\n")
+        f.write(np.array2string(input_tensor, threshold=int__max))
+
+
+def _generate_txt_test_data(
+    calibration_dataset_dir: str,
+    testing_dataset_dir: str,
+    input_tensor_spec: list[ModelInputSpec],
+):
+    # Generates txt tensor variants for input datasets
+    # Testing dataset can point to calibration dataset
+    dataset_paths = (
+        [calibration_dataset_dir, testing_dataset_dir]
+        if calibration_dataset_dir != testing_dataset_dir
+        else [testing_dataset_dir]
+    )
+    for d_path in dataset_paths:
+        quant_dataset = d_path.endswith("dataset_quant")
+
+        # For multiple input tests, list each sample dir, for single input tests the input files are in d_path
+        sample_dirs = [os.path.join(d_path, file) for file in os.listdir(d_path)]
+        sample_dirs = [file for file in sample_dirs if os.path.isdir(file)]
+        # Single input dataset has tensor directly in dataset path
+        if len(sample_dirs) == 0:
+            for input_tensor_name in sorted(os.listdir(d_path)):
+                input_tensor_path = os.path.join(d_path, input_tensor_name)
+                tensor_spec = input_tensor_spec[0]
+                dtype = (
+                    np.int8
+                    if quant_dataset
+                    else torch_type_to_numpy_type(tensor_spec.dtype)
+                )
+                _store_txt_input_tensor(input_tensor_path, dtype)
+        else:
+            for sample_dir in sample_dirs:
+                for idx, input_tensor_name in enumerate(os.listdir(sample_dir)):
+                    input_tensor_path = os.path.join(sample_dir, input_tensor_name)
+                    tensor_spec = input_tensor_spec[idx]
+                    dtype = (
+                        np.int8
+                        if quant_dataset
+                        else torch_type_to_numpy_type(tensor_spec.dtype)
+                    )
+                    _store_txt_input_tensor(input_tensor_path, dtype)

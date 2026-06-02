@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import abc
+import logging
 import os
 from abc import abstractmethod
 from pathlib import Path
@@ -15,6 +16,7 @@ import polars as pl
 from executorch.backends.nxp.backend.ir.converter.conversion.translator import (
     torch_type_to_numpy_type,
 )
+from executorch.backends.nxp.tests.utils import change_filepath_extension
 
 
 class BaseOutputComparator(abc.ABC):
@@ -35,6 +37,11 @@ class BaseOutputComparator(abc.ABC):
         :param npu_results_dir: Path to directory with NPU (delegated) results.
         :param output_tensor_spec: List of output tensor specifications.
         """
+        if logging.root.isEnabledFor(logging.DEBUG):
+            diff_cpu_npu_results_dir = os.path.join(
+                os.path.dirname(cpu_results_dir), "diff_cpu_npu_results"
+            )
+
         sample_dirs = [
             os.path.join(cpu_results_dir, file) for file in os.listdir(cpu_results_dir)
         ]
@@ -65,7 +72,59 @@ class BaseOutputComparator(abc.ABC):
                 )
                 npu_output_tensors.append((output_tensor_name, npu_tensor))
 
-            self.compare_sample(sample_dir, cpu_output_tensors, npu_output_tensors)
+                if logging.root.isEnabledFor(logging.DEBUG):
+                    # Store diff results if logging level is enabled
+                    diff_cpu_npu_tensor = np.abs(cpu_tensor - npu_tensor)
+                    os.makedirs(
+                        os.path.join(diff_cpu_npu_results_dir, sample_dir),
+                        exist_ok=True,
+                    )
+                    diff_cpu_npu_tensor_path = os.path.join(
+                        diff_cpu_npu_results_dir, sample_dir, output_tensor_name
+                    )
+                    diff_cpu_npu_tensor.tofile(diff_cpu_npu_tensor_path)
+
+                    # Store text tensor results
+                    int__max = np.iinfo(np.int32).max
+
+                    with open(
+                        change_filepath_extension(cpu_tensor_path, "txt"), "w"
+                    ) as f:
+                        f.write("Flattened tensor shape:" + str(cpu_tensor.shape))
+                        f.write(
+                            "\nOriginal tensor shape:"
+                            + str(list(cpu_tensor.shape))
+                            + "\n"
+                        )
+                        f.write(np.array2string(cpu_tensor, threshold=int__max))
+                    with open(
+                        change_filepath_extension(npu_tensor_path, "txt"), "w"
+                    ) as f:
+                        f.write("Flattened tensor shape:" + str(npu_tensor.shape))
+                        f.write(
+                            "\nOriginal tensor shape:"
+                            + str(list(npu_tensor.shape))
+                            + "\n"
+                        )
+                        f.write(np.array2string(npu_tensor, threshold=int__max))
+                    with open(
+                        change_filepath_extension(diff_cpu_npu_tensor_path, "txt"), "w"
+                    ) as f:
+                        f.write(
+                            "Flattened tensor shape:" + str(diff_cpu_npu_tensor.shape)
+                        )
+                        f.write(
+                            "\nOriginal tensor shape:"
+                            + str(list(diff_cpu_npu_tensor.shape))
+                            + "\n"
+                        )
+                        f.write(
+                            np.array2string(diff_cpu_npu_tensor, threshold=int__max)
+                        )
+
+                    # In case of int8 outputs, the remove_quant_io_ops flag was used and
+
+        self.compare_sample(sample_dir, cpu_output_tensors, npu_output_tensors)
 
     @abstractmethod
     def compare_sample(

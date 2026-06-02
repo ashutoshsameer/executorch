@@ -32,3 +32,8 @@ def save_pte_program(
 
     visualize_with_clusters(prog.exported_program(), visualize_file_name, False)
     return filename
+
+
+def change_filepath_extension(filename: str, extension: str) -> str:
+    base, _ = os.path.splitext(filename)
+    return base + "." + extension

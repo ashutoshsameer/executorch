@@ -43,21 +43,27 @@ class TestAddTensor:
             pytest.param(
                 (6, 82),
                 id="2D incorrect.",
-                marks=pytest.mark.xfail(reason="AIR-14602: incorrect results"),
+                marks=pytest.mark.xfail(
+                    reason="AIR-14602: incorrect results", strict=True
+                ),
             ),
             pytest.param(
                 (1, 68, 7),
                 id="3D incorrect.",
-                marks=pytest.mark.xfail(reason="AIR-14602: incorrect results"),
+                marks=pytest.mark.xfail(
+                    reason="AIR-14602: incorrect results", strict=True
+                ),
             ),
             pytest.param(
                 (1, 4, 9, 11, 4),
                 id="5D incorrect.",
-                marks=pytest.mark.xfail(reason="AIR-14602: incorrect results"),
+                marks=pytest.mark.xfail(
+                    reason="AIR-14602: incorrect results", strict=True
+                ),
             ),
         ],
     )
-    def test__basic_nsys_inference(self, x_input_shape, mocker):
+    def test__basic_nsys_inference(self, mocker, request, x_input_shape):
         x_input_spec = ModelInputSpec(x_input_shape)
         model = AddTensorModule()
         graph_verifier = DetailedGraphVerifier(
@@ -69,6 +75,7 @@ class TestAddTensor:
             model,
             [x_input_spec, x_input_spec],
             graph_verifier,
+            request,
             dataset_creator,
         )
 
@@ -82,11 +89,13 @@ class TestAddTensor:
             pytest.param(
                 (1, 4, 9, 11, 4),
                 id="5D.",
-                marks=pytest.mark.xfail(reason="AIR-14602: incorrect results"),
+                marks=pytest.mark.xfail(
+                    reason="AIR-14602: incorrect results", strict=True
+                ),
             ),
         ],
     )
-    def test__basic_nsys_inference_qat(self, x_input_shape, mocker):
+    def test__basic_nsys_inference_qat(self, mocker, request, x_input_shape):
         x_input_spec = ModelInputSpec(x_input_shape)
         model = AddTensorModule()
         graph_verifier = DetailedGraphVerifier(
@@ -98,6 +107,7 @@ class TestAddTensor:
             model,
             [x_input_spec, x_input_spec],
             graph_verifier,
+            request,
             dataset_creator,
             use_qat=True,
         )
@@ -118,11 +128,13 @@ class TestAddTensor:
             pytest.param(
                 [ModelInputSpec((69, 73)), ModelInputSpec((1, 73))],
                 id="2 inputs 2D incorrect.",
-                marks=pytest.mark.xfail(reason="AIR-14602: incorrect results"),
+                marks=pytest.mark.xfail(
+                    reason="AIR-14602: incorrect results", strict=True
+                ),
             ),
         ],
     )
-    def test__broadcast(self, input_spec, mocker):
+    def test__broadcast(self, mocker, request, input_spec):
         model = AddTensorModule()
         graph_verifier = DetailedGraphVerifier(
             mocker, expected_delegated_ops={AddTensor: 1}, expected_non_delegated_ops={}
@@ -133,6 +145,7 @@ class TestAddTensor:
             model,
             input_spec,
             graph_verifier,
+            request,
             dataset_creator,
         )
 
@@ -172,7 +185,7 @@ class TestAddTensor:
             ),
         ],
     )
-    def test__w_conv(self, x_input_shape, mocker):
+    def test__w_conv(self, mocker, request, x_input_shape):
         model = AddTensorConvModule()
 
         n, c, h, w = x_input_shape
@@ -187,7 +200,11 @@ class TestAddTensor:
         dataset_creator = RandomDatasetCreator(low=-1.0, high=1.0)
 
         lower_run_compare(
-            model, [x_input_spec, y_input_spec], graph_verifier, dataset_creator
+            model,
+            [x_input_spec, y_input_spec],
+            graph_verifier,
+            request,
+            dataset_creator,
         )
 
     @pytest.mark.parametrize(
@@ -200,11 +217,13 @@ class TestAddTensor:
             pytest.param(
                 [ModelInputSpec((1, 4, 5, 67)), ModelInputSpec((1, 8, 5, 1))],
                 id="2 inputs 4D + 4D incorrect.",
-                marks=pytest.mark.xfail(reason="AIR-14602: incorrect results"),
+                marks=pytest.mark.xfail(
+                    reason="AIR-14602: incorrect results", strict=True
+                ),
             ),
         ],
     )
-    def test__w_conv_broadcast(self, input_spec, mocker):
+    def test__w_conv_broadcast(self, mocker, request, input_spec):
         model = AddTensorConvModule()
 
         graph_verifier = DetailedGraphVerifier(
@@ -218,6 +237,7 @@ class TestAddTensor:
             model,
             input_spec,
             graph_verifier,
+            request,
             dataset_creator,
         )
 
