@@ -53,6 +53,12 @@ class DecomposeGroupedConvPass(ArmOpTargetedPass):
         torch.ops.aten.conv2d.default,
     )
 
+    targeted_ops = {
+        exir_ops.edge.aten.convolution.default,
+        torch.ops.aten.conv_transpose2d.input,
+        torch.ops.aten.conv2d.default,
+    }
+
     @staticmethod
     def _get_decomposition(op):
         match op:
@@ -212,7 +218,6 @@ class DecomposeGroupedConvPass(ArmOpTargetedPass):
             # Get quantization params of the weights and slice them.
             w_qarg = new_qparams[1]
             if DecomposeGroupedConvPass._is_per_channel_qparams(w_qarg):
-
                 # For transpose conv, axis=1 corresponds to output channels and
                 # does not align with grouped slicing.
                 # Per-channel quantization on axis=0 on the other hand could align here but
@@ -295,7 +300,6 @@ class DecomposeGroupedConvPass(ArmOpTargetedPass):
         for i, (input_slice, filter_slice, bias_slice) in enumerate(
             zip(input_slices, weight_slices, bias_slices)
         ):
-
             meta_copy = DecomposeGroupedConvPass._get_meta_copy(
                 meta,
                 i,
