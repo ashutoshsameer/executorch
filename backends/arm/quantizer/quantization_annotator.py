@@ -547,7 +547,6 @@ _one_to_one_shared_input_qspec: set[OpOverload] = {
     torch.ops.aten.split.Tensor,
     torch.ops.aten.split_with_sizes.default,
     torch.ops.aten.split_copy.Tensor,
-    torch.ops.aten.transpose.Dimname,
     torch.ops.aten.transpose.int,
     torch.ops.aten.transpose_copy.int,
     torch.ops.aten.t_copy.default,
@@ -574,6 +573,11 @@ _one_to_one_shared_input_qspec: set[OpOverload] = {
     torch.ops.aten.neg.default,
     torch.ops.aten.detach_copy.default,
 }
+
+# Dimname has been removed from upstream PyTorch, but existing models may still contain it.
+_transpose_dimname = getattr(torch.ops.aten.transpose, "Dimname", None)
+if _transpose_dimname is not None:
+    _one_to_one_shared_input_qspec.add(_transpose_dimname)
 
 _one_to_one_shared_input_or_input_act_qspec: set[OpOverload] = {
     torch.ops.aten.alias.default,
