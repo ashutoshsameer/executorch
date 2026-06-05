@@ -25,6 +25,11 @@
             }
         },
         {
+            "name": "qwen3-5-moe-cuda-serve",
+            "displayName": "Qwen3.5 MoE runner + serving worker (CUDA)",
+            "inherits": ["qwen3-5-moe-cuda"]
+        },
+        {
             "name": "qwen3-5-moe-metal",
             "displayName": "Qwen3.5 MoE runner (Metal)",
             "inherits": ["qwen3-5-moe-base"],
@@ -46,6 +51,12 @@
             "targets": ["qwen3_5_moe_runner"]
         },
         {
+            "name": "qwen3-5-moe-cuda-serve",
+            "displayName": "Build Qwen3.5 MoE runner + serving worker (CUDA)",
+            "configurePreset": "qwen3-5-moe-cuda-serve",
+            "targets": ["qwen3_5_moe_runner", "qwen3_5_moe_worker"]
+        },
+        {
             "name": "qwen3-5-moe-metal",
             "displayName": "Build Qwen3.5 MoE runner (Metal)",
             "configurePreset": "qwen3-5-moe-metal",
@@ -64,6 +75,20 @@
                 {
                     "type": "build",
                     "name": "qwen3-5-moe-cuda"
+                }
+            ]
+        },
+        {
+            "name": "qwen3-5-moe-cuda-serve",
+            "displayName": "Configure and build Qwen3.5 MoE runner + serving worker (CUDA)",
+            "steps": [
+                {
+                    "type": "configure",
+                    "name": "qwen3-5-moe-cuda-serve"
+                },
+                {
+                    "type": "build",
+                    "name": "qwen3-5-moe-cuda-serve"
                 }
             ]
         },
