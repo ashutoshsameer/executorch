@@ -2753,7 +2753,7 @@ class TestEmit(unittest.TestCase):
 
     def test_emit_non_const_buffer_device_none_when_flag_disabled(self) -> None:
         """Even with device tensors, non_const_buffer_device should be None when
-        enable_non_cpu_memory_planning is False (default)."""
+        enable_non_cpu_memory_planning is explicitly disabled."""
         from executorch.exir.backend.canonical_partitioners.pattern_op_partitioner import (
             generate_pattern_op_partitions,
         )
@@ -2816,8 +2816,9 @@ class TestEmit(unittest.TestCase):
             compile_config=EdgeCompileConfig(_check_ir_validity=False),
         )
         lowered = edge.to_backend(DevicePartitioner())
-        # Default: enable_non_cpu_memory_planning=False
-        et_prog = lowered.to_executorch()
+        et_prog = lowered.to_executorch(
+            config=ExecutorchBackendConfig(enable_non_cpu_memory_planning=False),
+        )
         program = et_prog._emitter_output.program
 
         plan = program.execution_plan[0]
